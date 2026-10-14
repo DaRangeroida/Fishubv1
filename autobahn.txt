@@ -1,0 +1,524 @@
+(() => {
+  // 0. If fetch was already hijacked by a previous run, restore that joint
+  if (window.__ORIGINAL_FETCH__) {
+    window.fetch = window.__ORIGINAL_FETCH__;
+    delete window.__ORIGINAL_FETCH__;
+  }
+
+  // 1. Mod-State Config (Persists across restarts)
+  window.__MOD_STATE = window.__MOD_STATE || {
+    noclip: false,
+    coinMultiplierActive: true,
+    multiplier: 25
+  };
+  delete window.__MOD_STATE.antiLeaderboard;
+
+  // Clear any existing polling loop
+  if (window.__GAME_SYNC_LOOP) clearInterval(window.__GAME_SYNC_LOOP);
+
+  // 2. React-Fiber Dynamic Grabber & Re-Hooking Engine
+  const getActiveGameState = () => {
+    const c = document.querySelector('canvas.absolute.inset-0.h-full.w-full');
+    if (!c) return null;
+
+    const fiberKey = Object.keys(c).find(k => k.startsWith('__reactFiber$'));
+    if (!fiberKey) return null;
+
+    let curr = c[fiberKey];
+    while (curr) {
+      let h = curr.memoizedState;
+      while (h) {
+        const target = h.memoizedState?.current || h.memoizedState;
+        if (target && target.phase !== undefined && target.entities !== undefined) {
+          return target;
+        }
+        h = h.next;
+      }
+      curr = curr.return;
+    }
+    return null;
+  };
+
+  const hookGameState = (g) => {
+    if (!g) return;
+
+    // NoClip Hook (N)
+    if (!g.__noclipHooked) {
+      let _crashed = g.crashed || null;
+      Object.defineProperty(g, 'crashed', {
+        get: () => (window.__MOD_STATE.noclip ? null : _crashed),
+        set: (val) => {
+          if (window.__MOD_STATE.noclip) {
+            g.phase = 'running';
+            _crashed = null;
+          } else {
+            _crashed = val;
+          }
+        },
+        configurable: true
+      });
+      g.__noclipHooked = true;
+    }
+
+    // Coin-Multiplier Hook (M)
+    if (!g.__coinHooked) {
+      let _coins = g.coins || 0;
+      Object.defineProperty(g, 'coins', {
+        get: () => _coins,
+        set: (val) => {
+          const diff = val - _coins;
+          if (window.__MOD_STATE.coinMultiplierActive && diff > 0) {
+            _coins += (diff * window.__MOD_STATE.multiplier);
+          } else {
+            _coins = val;
+          }
+        },
+        configurable: true
+      });
+      g.__coinHooked = true;
+    }
+
+    // Force running state if noclip is on during respawn
+    if (window.__MOD_STATE.noclip && g.phase === 'crashed') {
+      g.phase = 'running';
+    }
+  };
+
+  // 3. Auto-Watcher Loop (Ensures run 2, 3, 100+ stay hooked)
+  const syncEngine = () => {
+    const g = getActiveGameState();
+    if (g && (g !== window.__GAME || !g.__noclipHooked || !g.__coinHooked)) {
+      window.__GAME = g;
+      hookGameState(g);
+      console.log("%c⚡ AUTOBAHN: New Game Run Hooked & Active!", "color:#00ff66;font-weight:bold;");
+    }
+  };
+
+  // Run immediately and keep watching in background
+  syncEngine();
+  window.__GAME_SYNC_LOOP = setInterval(syncEngine, 200);
+
+  // 4. Inject Styles & UI (Only if not already mounted)
+  let style = document.getElementById('__hack_hud_styles');
+  if (!style) {
+    style = document.createElement('style');
+    style.id = '__hack_hud_styles';
+    style.textContent = `
+      #__hack_hud {
+        position: fixed;
+        top: 70px;
+        right: 24px;
+        width: 280px;
+        z-index: 999999;
+        background: rgba(13, 15, 22, 0.82);
+        backdrop-filter: blur(16px) saturate(180%);
+        -webkit-backdrop-filter: blur(16px) saturate(180%);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        color: #f1f5f9;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(255, 204, 0, 0.06);
+        user-select: none;
+        overflow: hidden;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      #__hack_hud.hidden-hud {
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-8px) scale(0.96);
+      }
+      .ab-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        background: linear-gradient(90deg, rgba(255, 204, 0, 0.14), rgba(255, 120, 0, 0.03));
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        cursor: grab;
+      }
+      .ab-header:active {
+        cursor: grabbing;
+      }
+      .ab-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .ab-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #00ff66;
+        box-shadow: 0 0 10px #00ff66;
+        animation: abPulse 2s infinite;
+      }
+      @keyframes abPulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.45; transform: scale(0.85); }
+      }
+      .ab-title {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        background: linear-gradient(90deg, #ffffff, #ffcc00);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .ab-min-btn {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #94a3b8;
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: bold;
+        transition: all 0.15s ease;
+      }
+      .ab-min-btn:hover {
+        background: rgba(255, 255, 255, 0.14);
+        color: #fff;
+      }
+      .ab-body {
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .ab-body.collapsed {
+        display: none;
+      }
+      .ab-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 0;
+      }
+      .ab-label-group {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .ab-kbd {
+        background: rgba(255, 255, 255, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        padding: 2px 6px;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 10px;
+        font-weight: 700;
+        color: #ffcc00;
+      }
+      .ab-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e2e8f0;
+      }
+      .ab-switch {
+        position: relative;
+        width: 42px;
+        height: 22px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      .ab-switch.active {
+        background: rgba(0, 255, 102, 0.22);
+        border-color: #00ff66;
+        box-shadow: 0 0 12px rgba(0, 255, 102, 0.25);
+      }
+      .ab-switch::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        background: #94a3b8;
+        border-radius: 50%;
+        transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s ease, box-shadow 0.25s ease;
+      }
+      .ab-switch.active::after {
+        transform: translateX(20px);
+        background: #00ff66;
+        box-shadow: 0 0 8px #00ff66;
+      }
+      .ab-mult-card {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .ab-mult-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .ab-input-wrap {
+        display: flex;
+        align-items: center;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 204, 0, 0.35);
+        border-radius: 7px;
+        padding: 3px 8px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .ab-input-wrap:focus-within {
+        border-color: #ffcc00;
+        box-shadow: 0 0 10px rgba(255, 204, 0, 0.25);
+      }
+      .ab-num-input {
+        width: 48px;
+        background: transparent;
+        border: none;
+        color: #ffcc00;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 13px;
+        font-weight: 700;
+        text-align: right;
+        outline: none;
+      }
+      .ab-num-input::-webkit-inner-spin-button,
+      .ab-num-input::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      .ab-unit {
+        color: #ffcc00;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+        font-weight: 700;
+        margin-left: 2px;
+      }
+      .ab-slider {
+        -webkit-appearance: none;
+        width: 100%;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        outline: none;
+      }
+      .ab-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #ffcc00;
+        box-shadow: 0 0 10px rgba(255, 204, 0, 0.8);
+        cursor: pointer;
+        transition: transform 0.1s ease;
+      }
+      .ab-slider::-webkit-slider-thumb:hover {
+        transform: scale(1.18);
+      }
+      .ab-footer {
+        padding: 8px 16px;
+        background: rgba(0, 0, 0, 0.35);
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        font-size: 10px;
+        color: #64748b;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Build HUD DOM if not present
+  let hud = document.getElementById('__hack_hud');
+  if (!hud) {
+    hud = document.createElement('div');
+    hud.id = '__hack_hud';
+    hud.innerHTML = `
+      <div class="ab-header" id="__ab_drag">
+        <div class="ab-title-wrap">
+          <span class="ab-dot"></span>
+          <span class="ab-title">Autobahn Mod</span>
+        </div>
+        <button class="ab-min-btn" id="__ab_min" title="Minimize">−</button>
+      </div>
+      <div class="ab-body" id="__ab_body">
+        <div class="ab-row">
+          <div class="ab-label-group">
+            <span class="ab-kbd">N</span>
+            <span class="ab-label">NoClip (Godmode)</span>
+          </div>
+          <div class="ab-switch" id="__ab_sw_noclip"></div>
+        </div>
+
+        <div class="ab-row">
+          <div class="ab-label-group">
+            <span class="ab-kbd">M</span>
+            <span class="ab-label">Coin Multiplier</span>
+          </div>
+          <div class="ab-switch" id="__ab_sw_mult"></div>
+        </div>
+
+        <div class="ab-mult-card">
+          <div class="ab-mult-top">
+            <div class="ab-label-group">
+              <span class="ab-kbd">C</span>
+              <span class="ab-label">Boost Factor</span>
+            </div>
+            <div class="ab-input-wrap">
+              <input type="number" min="1" max="9999" class="ab-num-input" id="__ab_input_mult" />
+              <span class="ab-unit">x</span>
+            </div>
+          </div>
+          <input type="range" min="1" max="250" class="ab-slider" id="__ab_slider_mult" />
+        </div>
+      </div>
+      <div class="ab-footer">
+        <span>[H] Hide Menu</span>
+        <span>Drag header to move</span>
+      </div>
+    `;
+    document.body.appendChild(hud);
+
+    // 5. Wire up UI Controls
+    const swNoclip = document.getElementById('__ab_sw_noclip');
+    const swMult = document.getElementById('__ab_sw_mult');
+    const inputMult = document.getElementById('__ab_input_mult');
+    const sliderMult = document.getElementById('__ab_slider_mult');
+    const minBtn = document.getElementById('__ab_min');
+    const bodyEl = document.getElementById('__ab_body');
+    const dragHandle = document.getElementById('__ab_drag');
+
+    const updateHUD = () => {
+      swNoclip.classList.toggle('active', !!window.__MOD_STATE.noclip);
+      swMult.classList.toggle('active', !!window.__MOD_STATE.coinMultiplierActive);
+      if (document.activeElement !== inputMult) {
+        inputMult.value = window.__MOD_STATE.multiplier;
+      }
+      sliderMult.value = Math.min(250, Math.max(1, window.__MOD_STATE.multiplier));
+    };
+    window.__UPDATE_HUD = updateHUD;
+    updateHUD();
+
+    swNoclip.addEventListener('click', () => {
+      window.__MOD_STATE.noclip = !window.__MOD_STATE.noclip;
+      if (window.__GAME && window.__MOD_STATE.noclip && window.__GAME.phase === 'crashed') {
+        window.__GAME.phase = 'running';
+      }
+      updateHUD();
+    });
+
+    swMult.addEventListener('click', () => {
+      window.__MOD_STATE.coinMultiplierActive = !window.__MOD_STATE.coinMultiplierActive;
+      updateHUD();
+    });
+
+    sliderMult.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      if (!isNaN(val) && val > 0) {
+        window.__MOD_STATE.multiplier = val;
+        inputMult.value = val;
+      }
+    });
+
+    inputMult.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      if (!isNaN(val) && val > 0) {
+        window.__MOD_STATE.multiplier = val;
+        sliderMult.value = Math.min(250, Math.max(1, val));
+      }
+    });
+
+    inputMult.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === 'Escape') {
+        inputMult.blur();
+      }
+      e.stopPropagation();
+    });
+
+    minBtn.addEventListener('click', () => {
+      const isCollapsed = bodyEl.classList.toggle('collapsed');
+      minBtn.textContent = isCollapsed ? '+' : '−';
+    });
+
+    // Dragging Logic
+    let isDragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    dragHandle.addEventListener('mousedown', (e) => {
+      if (e.target === minBtn) return;
+      isDragging = true;
+      const rect = hud.getBoundingClientRect();
+      dragOffsetX = e.clientX - rect.left;
+      dragOffsetY = e.clientY - rect.top;
+      hud.style.right = 'auto';
+      hud.style.left = `${rect.left}px`;
+      hud.style.top = `${rect.top}px`;
+    });
+
+    if (window.__HUD_MOUSE_MOVE) window.removeEventListener('mousemove', window.__HUD_MOUSE_MOVE);
+    if (window.__HUD_MOUSE_UP) window.removeEventListener('mouseup', window.__HUD_MOUSE_UP);
+
+    window.__HUD_MOUSE_MOVE = (e) => {
+      if (!isDragging) return;
+      const x = Math.max(8, Math.min(window.innerWidth - hud.offsetWidth - 8, e.clientX - dragOffsetX));
+      const y = Math.max(8, Math.min(window.innerHeight - hud.offsetHeight - 8, e.clientY - dragOffsetY));
+      hud.style.left = `${x}px`;
+      hud.style.top = `${y}px`;
+    };
+
+    window.__HUD_MOUSE_UP = () => {
+      isDragging = false;
+    };
+
+    window.addEventListener('mousemove', window.__HUD_MOUSE_MOVE);
+    window.addEventListener('mouseup', window.__HUD_MOUSE_UP);
+  } else if (window.__UPDATE_HUD) {
+    window.__UPDATE_HUD();
+  }
+
+  // 6. Global Hotkeys
+  if (window.__KEY_LISTENER) window.removeEventListener('keydown', window.__KEY_LISTENER);
+  window.__KEY_LISTENER = (e) => {
+    if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+
+    const key = e.key.toLowerCase();
+    const hudEl = document.getElementById('__hack_hud');
+    const bodyEl = document.getElementById('__ab_body');
+    const inputMult = document.getElementById('__ab_input_mult');
+    const minBtn = document.getElementById('__ab_min');
+
+    if (key === 'n') {
+      window.__MOD_STATE.noclip = !window.__MOD_STATE.noclip;
+      if (window.__GAME && window.__MOD_STATE.noclip && window.__GAME.phase === 'crashed') {
+        window.__GAME.phase = 'running';
+      }
+      if (window.__UPDATE_HUD) window.__UPDATE_HUD();
+    } else if (key === 'm') {
+      window.__MOD_STATE.coinMultiplierActive = !window.__MOD_STATE.coinMultiplierActive;
+      if (window.__UPDATE_HUD) window.__UPDATE_HUD();
+    } else if (key === 'c') {
+      e.preventDefault();
+      if (hudEl) hudEl.classList.remove('hidden-hud');
+      if (bodyEl) bodyEl.classList.remove('collapsed');
+      if (minBtn) minBtn.textContent = '−';
+      if (inputMult) {
+        inputMult.focus();
+        inputMult.select();
+      }
+    } else if (key === 'h') {
+      if (hudEl) hudEl.classList.toggle('hidden-hud');
+    }
+  };
+  window.addEventListener('keydown', window.__KEY_LISTENER);
+
+  console.log("%c♾️ PERSISTENT AUTOBAHN ENGINE ENGAGED: Multi-run support active!", "color:#ffcc00;font-size:14px;font-weight:bold;");
+})();
