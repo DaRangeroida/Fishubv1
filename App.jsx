@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { createScene } from "./scene.js";
 import { fishColor, prettyName, rarityColor } from "./fish.js";
 
+// Each browser gets its own bot on the server, identified by this id.
+const botId = localStorage.botId ||= crypto.randomUUID();
+
 const api = (path, body) =>
-  fetch(`/api/${path}`, body && {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+  fetch(`/api/${path}`, {
+    headers: { "Content-Type": "application/json", "X-Bot-Id": botId },
+    ...(body && { method: "POST", body: JSON.stringify(body) }),
   }).then((r) => r.json());
 
 const fmt = (n, d = 0) => new Intl.NumberFormat("de-DE", { maximumFractionDigits: d }).format(n);
