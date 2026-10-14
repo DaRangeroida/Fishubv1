@@ -95,7 +95,10 @@ async function post(bot, path, body) {
     signal: AbortSignal.timeout(10000),
   });
   const text = await res.text();
-  if (res.status === 401 || res.status === 403) throw new Error("Cookies abgelaufen oder ungültig");
+  if (res.status === 401 || res.status === 403) {
+    const cloudflare = /cloudflare|just a moment|cf-chl/i.test(text) || res.headers.has("cf-mitigated");
+    throw new Error(`Cookies abgelaufen oder ungültig (HTTP ${res.status}${cloudflare ? ", Cloudflare-Block" : ""}): ${text.slice(0, 120).replace(/\s+/g, " ")}`);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
   try { return JSON.parse(text); } catch { throw new Error(`Keine JSON-Antwort: ${text.slice(0, 200)}`); }
 }
