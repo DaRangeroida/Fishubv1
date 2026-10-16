@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createScene } from "./scene.js";
 import { fishColor, prettyName, rarityColor } from "./fish.js";
 
@@ -43,12 +43,23 @@ function Scene({ state }) {
 }
 
 function Totals({ state }) {
+  // Hooked fish that got away are the cap on the catch rate, so show both.
+  const hooked = state.caught + (state.escaped || 0);
+  const perHour = state.farmedMs > 0 ? (state.caught / state.farmedMs) * 3600000 : 0;
   return (
     <section className="catches" aria-label="Fänge">
       <div className="totals">
         <div>
           <strong>{fmt(state.caught)}</strong>
           <span>{state.caught === 1 ? "Fisch" : "Fische"}</span>
+        </div>
+        <div>
+          <strong>{fmt(perHour, 1)}</strong>
+          <span>Fische/h</span>
+        </div>
+        <div>
+          <strong>{hooked ? fmt((state.caught / hooked) * 100) : "–"} %</strong>
+          <span>gelandet</span>
         </div>
         <div>
           <strong>{duration(state.farmedMs || 0)}</strong>
@@ -135,10 +146,100 @@ function CookieSheet({ onStart, onClose, error, canClose }) {
   );
 }
 
+// What turbo found out about the server so far; null means not tested yet.
+const probeLabel = (v, on, off) => (v == null ? "wird getestet" : v ? on : off);
+
+// More hub_session cookies from other logins; each one fishes in parallel.
+const loadExtra = () => {
+  try {
+    const v = JSON.parse(localStorage.extraSessions || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+};
+
+function ExtraSessions({ state, onExtra }) {
+  const [list, setList] = useState(loadExtra);
+  // Typing only edits locally; a half-pasted cookie must not start a session.
+  const commit = (next = list) => {
+    setList(next);
+    localStorage.extraSessions = JSON.stringify(next);
+    onExtra(next.map((h) => h.trim()).filter(Boolean));
+  };
+  const sessions = state.sessions || [];
+  return (
+    <section className="extra">
+      <h3>Weitere Logins</h3>
+      <p>Der Server erlaubt pro Login nur eine Angel-Session. Log dich in einem anderen Browser oder Inkognito-Fenster nochmal ein und füg dessen <code>hub_session</code> hier ein: jeder Login angelt parallel mit.</p>
+      {list.map((hub, i) => (
+        <div className="extra-row" key={i}>
+          <input type="password" value={hub} placeholder="hub_session" autoComplete="off" aria-label={`hub_session Login ${i + 2}`}
+            onChange={(e) => setList(list.map((h, j) => (j === i ? e.target.value : h)))}
+            onBlur={() => commit()} />
+          <button type="button" className="icon" aria-label={`Login ${i + 2} entfernen`} title="Entfernen"
+            onClick={() => commit(list.filter((_, j) => j !== i))}>✕</button>
+        </div>
+      ))}
+      <button type="button" className="ghost add" onClick={() => setList([...list, ""])}>+ Login hinzufügen</button>
+      {state.running && sessions.length > 0 && (
+        <dl className="probe">
+          {sessions.map((s) => (
+            <Fragment key={s.n}>
+              <dt>Login {s.n}</dt>
+              <dd>{s.error ? <span className="bad">{s.error}</span> : `${fmt(s.caught)} Fische · ${s.running ? "angelt" : "gestoppt"}`}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+    </section>
+  );
+}
+
+const CITIES = [["neustadt", "Neustadt"], ["seeburg", "Seeburg"]];
+
+function SettingsSheet({ state, onTurbo, onCity, onExtra, onCookies, onClose }) {
+  const turbo = !!state.turbo;
+  const p = state.probe || {};
+  return (
+    <div className="sheet-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="sheet" role="dialog" aria-labelledby="settings-title">
+        <h2 id="settings-title">Einstellungen</h2>
+        <button type="button" role="switch" aria-checked={turbo} className={`switch ${turbo ? "on" : ""}`} onClick={() => onTurbo(!turbo)}>
+          <span>
+            <b>🔥 Turbo</b>
+            <small>So schnell wie der Server es zulässt. Was er nicht mitmacht, wird automatisch wieder abgeschaltet.</small>
+          </span>
+          <i aria-hidden="true" />
+        </button>
+        {turbo && state.running && (
+          <dl className="probe">
+            <dt>Presses vorab</dt><dd>{probeLabel(p.ahead, "aktiv", "vom Server abgelehnt")}</dd>
+            <dt>Knapp einholen</dt><dd>{probeLabel(p.earlyRetry, "aktiv", "abgeschaltet")}</dd>
+          </dl>
+        )}
+        <section className="extra">
+          <h3>Stadt</h3>
+          <div className="city">
+            {CITIES.map(([id, name]) => (
+              <button key={id} type="button" className={state.city === id ? "cast" : "ghost"} aria-pressed={state.city === id}
+                onClick={() => onCity(id)}>{name}</button>
+            ))}
+          </div>
+        </section>
+        <ExtraSessions state={state} onExtra={onExtra} />
+        <div className="sheet-actions">
+          <button type="button" className="ghost" onClick={onCookies}>Cookies ändern</button>
+          <button type="button" className="cast" onClick={onClose}>Fertig</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState({ loaded: false, running: false, caught: 0, money: 0, species: {}, recent: [] });
   const [sheet, setSheet] = useState(!(localStorage.hubSession && localStorage.cfClearance));
   const [error, setError] = useState("");
+  const [settings, setSettings] = useState(false);
 
   useEffect(() => {
     const tick = () => api("status").then((s) => setState({ ...s, loaded: true })).catch(() => {});
@@ -157,7 +258,8 @@ export default function App() {
   const start = async (hubSession = localStorage.hubSession, cfClearance = localStorage.cfClearance) => {
     localStorage.hubSession = hubSession;
     localStorage.cfClearance = cfClearance;
-    const res = await api("start", { hubSession, cfClearance });
+    const extra = loadExtra().map((h) => h.trim()).filter(Boolean);
+    const res = await api("start", { hubSession, cfClearance, extra });
     if (res.error) return setError(res.error);
     setError("");
     setSheet(false);
@@ -181,16 +283,27 @@ export default function App() {
       </div>
 
       <div className="dock">
-        <button className="icon" onClick={() => setSheet(true)} title="Cookies ändern" aria-label="Cookies ändern">
+        <button className="icon" onClick={() => setSettings(true)} title="Einstellungen" aria-label="Einstellungen">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Zm7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.3 7.3 0 0 0-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65c-.61.25-1.17.58-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.25.42.49.42h4c.25 0 .45-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65Z"/></svg>
         </button>
-        <p className={`phase ${state.running ? "on" : ""}`}>{phaseLabel(state)}</p>
+        <p className={`phase ${state.running ? "on" : ""} ${state.turbo ? "turbo" : ""}`}>{phaseLabel(state)}</p>
         <button className="icon" onClick={reset} title="Statistik zurücksetzen" aria-label="Statistik zurücksetzen">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7Z"/></svg>
         </button>
       </div>
 
       {error && !sheet && <p className="toast" role="alert" onClick={() => setError("")}>{error}</p>}
+
+      {settings && !sheet && (
+        <SettingsSheet
+          state={state}
+          onTurbo={(turbo) => api("settings", { turbo }).then((s) => setState({ ...s, loaded: true }))}
+          onCity={(city) => api("settings", { city }).then((s) => setState({ ...s, loaded: true }))}
+          onExtra={(extra) => api("settings", { extra }).then((s) => setState({ ...s, loaded: true }))}
+          onCookies={() => { setSettings(false); setSheet(true); }}
+          onClose={() => setSettings(false)}
+        />
+      )}
 
       {sheet && (
         <CookieSheet onStart={start} onClose={() => setSheet(false)} error={error}

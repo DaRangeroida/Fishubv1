@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "concurrently \"node server.js\" \"vite\"",
     "build": "vite build",
-    "start": "node server.js"
+    "start": "node server.js",
+    "debug": "set DEBUG=1&& node server.js"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.1",

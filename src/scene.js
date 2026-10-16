@@ -171,7 +171,80 @@ function buildClawd() {
   root.add(hat);
 
   shadows(root);
-  return { root, body, eyes, arms, legs, hat };
+  return { root, body, eyes, arms, legs, hat, skin: orange };
+}
+
+// Teardrop flame: round at the base, licking up to a point.
+const FLAME_GEO = (() => {
+  const pts = [];
+  for (let i = 0; i <= 14; i++) {
+    const y = i / 14;
+    const r = y < 0.3 ? Math.sin((y / 0.3) * Math.PI / 2) : (1 - (y - 0.3) / 0.7) ** 1.4;
+    pts.push(new THREE.Vector2(Math.max(r, 0.001) * 0.5, y));
+  }
+  return new THREE.LatheGeometry(pts, 12);
+})();
+
+// Turbo look: flame tongues all over Clawd's body plus rising embers. Math.random,
+// not rand(), so the scenery stays the same on every load.
+function buildFire() {
+  const group = new THREE.Group();
+  const mats = ["#ff3d1f", "#ff8f1f", "#ffe04d"].map((c) => noOutline(new THREE.MeshBasicMaterial({ color: c })));
+  const tongues = [];
+  // Red outside, then orange, then a yellow core, each pushed a bit further out so all three show.
+  const add = (x, y, z, size, lx, lz, ox, oz) => mats.forEach((m, layer) => {
+    const f = new THREE.Mesh(FLAME_GEO, m);
+    f.position.set(x + ox * layer * 0.05, y, z + oz * layer * 0.05);
+    f.userData = {
+      w: size * (1 - layer * 0.3), h: size * (2.2 - layer * 0.55), lx, lz,
+      phase: Math.random() * 10, speed: 9 + Math.random() * 6,
+    };
+    group.add(f);
+    tongues.push(f);
+  });
+  for (let i = 0; i < 18; i++) {
+    const a = (i / 18) * Math.PI * 2 + Math.random() * 0.2;
+    const ox = Math.cos(a), oz = Math.sin(a);
+    if (oz > 0.6 && Math.abs(ox) < 0.55) continue; // keep the face clear
+    add(ox * 0.6, 0.12 + Math.random() * 0.55, oz * 0.4, 0.26 + Math.random() * 0.1, oz * 0.35, -ox * 0.35, ox, oz);
+  }
+  for (const [x, z] of [[-0.5, -0.2], [-0.25, -0.3], [0, -0.32], [0.25, -0.3], [0.5, -0.2], [-0.55, 0.15], [0.55, 0.15]])
+    add(x, 0.82, z, 0.36 + Math.random() * 0.1, 0, -x * 0.25, 0, -0.4);
+
+  const EMBERS = 50;
+  const pos = new Float32Array(EMBERS * 3);
+  const vel = new Float32Array(EMBERS);
+  const spawn = (i, y = 0.4 + Math.random() * 1.6) => {
+    const a = Math.random() * Math.PI * 2;
+    pos[i * 3] = Math.cos(a) * 0.6 * Math.random();
+    pos[i * 3 + 1] = y;
+    pos[i * 3 + 2] = Math.sin(a) * 0.4 * Math.random();
+    vel[i] = 0.8 + Math.random() * 1.1;
+  };
+  for (let i = 0; i < EMBERS; i++) spawn(i);
+  const emberGeo = new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const embers = new THREE.Points(emberGeo, new THREE.PointsMaterial({ color: "#ffc04d", size: 0.07 }));
+  embers.frustumCulled = false;
+  group.add(embers);
+
+  const update = (t, dt, k) => {
+    group.visible = k > 0.01;
+    if (!group.visible) return;
+    for (const f of tongues) {
+      const u = f.userData;
+      const flick = 0.8 + 0.2 * Math.sin(t * u.speed + u.phase) + 0.12 * Math.sin(t * u.speed * 2.7 + u.phase * 3);
+      f.scale.set(u.w * k, u.h * flick * k, u.w * k);
+      f.rotation.set(u.lx + Math.sin(t * 4 + u.phase) * 0.08, 0, u.lz + Math.sin(t * 3.3 + u.phase) * 0.12);
+    }
+    for (let i = 0; i < EMBERS; i++) {
+      pos[i * 3 + 1] += vel[i] * dt;
+      pos[i * 3] += Math.sin(t * 3 + i) * 0.15 * dt;
+      if (pos[i * 3 + 1] > 2.2) spawn(i, 0.5);
+    }
+    emberGeo.attributes.position.needsUpdate = true;
+    embers.material.size = 0.07 * k;
+  };
+  return { group, update };
 }
 
 // Tapered tube that is rebuilt every frame so the rod can bend.
@@ -649,6 +722,16 @@ export function createScene(canvas) {
   scene.add(clawd.root);
   const baseY = clawd.root.position.y;
 
+  // Turbo: Clawd's body catches fire and lights up the bank around him
+  const fire = buildFire();
+  clawd.root.add(fire.group);
+  const fireLight = new THREE.PointLight("#ff7a2a", 0, 8, 1.5);
+  fireLight.position.set(0, 0.7, 0.6);
+  clawd.root.add(fireLight);
+  const skinColor = clawd.skin.color.clone();
+  const fireSkin = new THREE.Color("#ff5a1f");
+  let fireK = 0;
+
   // Little rain cloud that shows up over Clawd when a fish escapes
   const gloom = new THREE.Group();
   const gloomMat = outline(toon("#8d93a3"), 0.006);
@@ -844,7 +927,7 @@ export function createScene(canvas) {
       yaw = 0.1 + Math.sin(t * 2.7) * 0.15;
       bend = 0.55 + Math.sin(t * 13) * 0.12;
       lean = -0.15;
-      crankSpeed = 18;
+      crankSpeed = server.turbo ? 32 : 18;
       bobberAt = "fight";
       legSwing = 0.15;
     } else if (st.m === "catch") {
@@ -874,6 +957,13 @@ export function createScene(canvas) {
     clawd.hat.rotation.z = 0.08 + jump * 0.3;
     clawd.hat.rotation.x = -0.06 + sad * 0.3;
     clawd.hat.position.y = 0.93 - sad * 0.1;
+
+    fireK = lerp(fireK, server.turbo ? 1 : 0, 1 - Math.exp(-dt * 3));
+    fire.update(t, dt, fireK);
+    const flicker = 1 + Math.sin(t * 17) * 0.2 + Math.sin(t * 29) * 0.12;
+    clawd.skin.color.copy(skinColor).lerp(fireSkin, fireK);
+    clawd.skin.emissive.setRGB(1, 0.22, 0).multiplyScalar(fireK * 0.45 * flicker);
+    fireLight.intensity = fireK * 3 * flicker;
 
     // Eyes: blink, squint while fighting, happy after a catch
     let eyeY = 1;
