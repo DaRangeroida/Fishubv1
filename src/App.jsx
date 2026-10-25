@@ -194,7 +194,7 @@ function ExtraSessions({ state, onExtra }) {
   );
 }
 
-const CITIES = [["neustadt", "Neustadt"], ["seeburg", "Seeburg"]];
+const CITIES = [["neustadt", "Neustadt"], ["seeburg", "Seeburg"], ["bergheim", "Bergheim"]];
 
 function SettingsSheet({ state, onTurbo, onCity, onExtra, onCookies, onClose }) {
   const turbo = !!state.turbo;

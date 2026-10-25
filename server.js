@@ -11,6 +11,7 @@ const STATS_FILE = process.env.STATS_FILE || new URL("./stats.json", import.meta
 const CITIES = {
   neustadt: "ns-fluss",
   seeburg: "sb-steg",
+  bergheim: "bh-ache-ost",
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 
@@ -109,7 +110,19 @@ async function post(bot, path, body) {
   if (DEBUG) console.log(`[debug] -> ${path} ${JSON.stringify(body)}`);
   const res = await fetch(BASE + path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": "LocalDevTest/1.0", Cookie: bot.cookie },
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+      Cookie: bot.cookie,
+      // The game rejects requests that don't look like they came from its own page.
+      Origin: BASE,
+      Referer: BASE + "/hub/",
+      Accept: "*/*",
+      "Accept-Language": "de-DE,de;q=0.9",
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Dest": "empty",
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10000),
   });
